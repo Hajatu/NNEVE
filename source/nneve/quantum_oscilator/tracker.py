@@ -32,6 +32,6 @@ class QOTracker(QOTrackerBase):
 
     def get_trace(self, index: int) -> str:
         return (
-            f"epoch: {index}, loss: {self.loss[-1]:.4f}, λ: "
-            f"{self.eigenvalue[-1]:.4f}, c: {self.c[-1]:.2f}"
+            f"epoch: {index:<6.0f} loss: {self.loss[-1]:<10.4f} λ: "
+            f"{self.eigenvalue[-1]:<10.4f} c: {self.c[-1]:<5.2f}"
         )
