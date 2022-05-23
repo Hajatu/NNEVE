@@ -21,7 +21,18 @@ def test_validate_output():
     nn = QONetwork(constants=constants, is_debug=True)
     x = constants.sample()
     deriv_x = tf.Variable(initial_value=x)
+
     eigenvalue = 1.0
 
-    retval = nn._get_residuum_function(deriv_x, x, eigenvalue)
-    print(retval)
+    assert x.shape == (16, 1)
+    assert x.dtype == tf.float32
+    assert deriv_x.shape == (16, 1)
+    assert deriv_x.dtype == tf.float32
+
+    residuum, y_values = nn._get_residuum_function(deriv_x, x, eigenvalue)  # type: ignore
+
+    assert residuum.shape == ()
+    assert residuum.dtype == tf.float32
+    assert abs(float(residuum) - 257.0) < 1.0
+    assert y_values.shape == (16, 1)
+    assert y_values.dtype == tf.float32

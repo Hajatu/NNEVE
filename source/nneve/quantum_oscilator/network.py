@@ -75,8 +75,6 @@ class QONetwork(QONetworkBase):
                 2,
             )
 
-        self._potential_function = potential
-
         @tf.function
         def boundary(x: tf.Tensor) -> tf.Tensor:
             return (
