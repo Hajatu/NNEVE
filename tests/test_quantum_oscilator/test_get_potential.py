@@ -20,8 +20,10 @@ def test_validate_output():
     )
     nn = QONetwork(constants=constants, is_debug=True)
     x = constants.sample()
-    deriv_x = tf.Variable(initial_value=x)
-    eigenvalue = 1.0
+    assert x.shape == (16, 1)
+    assert x.dtype == tf.float32
 
-    retval = nn._get_residuum_function(deriv_x, x, eigenvalue)
-    print(retval)
+    retval = nn._potential_function(x)
+
+    assert retval.shape == (16, 1)
+    assert retval.dtype == tf.float32

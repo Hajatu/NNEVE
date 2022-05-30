@@ -1,14 +1,37 @@
+import typing
 from typing import Optional
 
 import tensorflow as tf
-from pydantic import Field
+from pydantic import BaseModel, Field
+from tensorflow import keras
 
-from .base.constants import QOConstantsBase
+from .tracker import QOTracker
 
-__all__ = ["QOConstants"]
+if typing.TYPE_CHECKING:
+    from keras.api._v2 import keras  # noqa: F811
+__all__ = [
+    "DEFAULT_LEARNING_RATE",
+    "DEFAULT_BETA_1",
+    "DEFAULT_BETA_2",
+    "QOConstants",
+]
+
+DEFAULT_LEARNING_RATE: float = 0.008
+DEFAULT_BETA_1: float = 0.999
+DEFAULT_BETA_2: float = 0.9999
 
 
-class QOConstants(QOConstantsBase):
+class QOConstants(BaseModel):
+
+    optimizer: keras.optimizers.Optimizer = Field(
+        default=keras.optimizers.Adam(
+            learning_rate=DEFAULT_LEARNING_RATE,
+            beta_1=DEFAULT_BETA_1,
+            beta_2=DEFAULT_BETA_2,
+        )
+    )
+    tracker: QOTracker = Field(default_factory=QOTracker)
+
     k: float
     mass: float
     x_left: float
@@ -22,6 +45,11 @@ class QOConstants(QOConstantsBase):
     v_lambda: float = Field(default=1.0)
     v_drive: float = Field(default=1.0)
     __sample: Optional[tf.Tensor] = None
+
+    class Config:
+        allow_mutation = True
+        arbitrary_types_allowed = True
+        underscore_attrs_are_private = True
 
     def sample(self) -> tf.Tensor:
         if self.__sample is None:

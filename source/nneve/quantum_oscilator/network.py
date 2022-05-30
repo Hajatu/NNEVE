@@ -1,12 +1,13 @@
 import logging
 import typing
 from contextlib import suppress
-from typing import Any, Callable, List, Tuple, cast
+from copy import deepcopy
+from typing import Any, Callable, Generator, List, Sequence, Tuple, cast
 
 import tensorflow as tf
+from rich.progress import Progress
 from tensorflow import keras
 
-from .base import LossFunctionT, QONetworkBase
 from .constants import QOConstants
 from .layers import Eigenvalue
 from .params import QOParams
@@ -14,11 +15,46 @@ from .params import QOParams
 if typing.TYPE_CHECKING:
     from keras.api._v2 import keras  # noqa: F811
 
+LossFunctionT = Callable[
+    [tf.Tensor, tf.Variable, float],
+    Tuple[tf.Tensor, Tuple[Any, ...]],
+]
 
-class QONetwork(QONetworkBase):
+
+class QONetwork(keras.Model):
 
     constants: QOConstants
-    eigenvalue_function: Callable[[], tf.Tensor]
+    is_debug: bool
+    loss_function: LossFunctionT
+    is_console_mode: bool
+
+    class Config:
+        allow_mutation = True
+        arbitrary_types_allowed = True
+
+    def __init__(
+        self,
+        constants: QOConstants,
+        is_debug: bool = False,
+        is_console_mode: bool = True,
+    ):
+        """_summary_
+
+        Parameters
+        ----------
+        constants : QOConstants
+            _description_
+        is_debug : bool, optional
+            _description_, by default False
+        is_console_mode : bool, optional
+            _description_, by default True
+        """
+        self.constants = constants
+        self.is_console_mode = is_console_mode
+        self.is_debug = is_debug
+        inputs, outputs = self.assemble_hook()
+        super().__init__(inputs=inputs, outputs=outputs)
+        self.loss_function = self.get_loss_function()
 
     def assemble_hook(
         self,
@@ -32,190 +68,196 @@ class QONetwork(QONetworkBase):
             ),
         )
         # One neuron decides what value should λ have
-        input_and_eigenvalue = Eigenvalue()(inputs)
+        eigenvalue_out = Eigenvalue(name="eigenvalue")(inputs)
+        input_and_eigenvalue = keras.layers.Concatenate(axis=1)(
+            [inputs, eigenvalue_out]
+        )
         # two dense layers, each with {neurons} neurons as NN body
-        first = keras.layers.Dense(
-            self.constants.neuron_count,
+        d1 = keras.layers.Dense(
+            2,
             activation=tf.sin,
             name="dense_1",
             dtype=tf.float32,
         )(input_and_eigenvalue)
         # internal second layer
-        second = keras.layers.Dense(
+        d2 = keras.layers.Dense(
             self.constants.neuron_count,
             activation=tf.sin,
             name="dense_2",
             dtype=tf.float32,
-        )(first)
+        )(d1)
         # single value output from neural network
         outputs = keras.layers.Dense(
             1,
             # ; activation=tf.sin,
             name="predictions",
             dtype=tf.float32,
-        )(second)
+        )(d2)
         # single output from full network, λ is accessed by single call
         # to "eigenvalue" Dense layer - much cheaper op
-        return [inputs], [outputs]
-
-    def post_assemble_hook(self) -> None:
-        self.eigenvalue_function = cast(
-            Callable[[], tf.Tensor],
-            lambda *_: self.get_layer("eigenvalue").call(None),
-        )
+        return [inputs], [outputs, eigenvalue_out]
 
     def get_loss_function(self) -> LossFunctionT:  # noqa: CFQ004, CFQ001
         @tf.function
-        def potential(x: tf.Tensor) -> tf.Tensor:
-            return tf.divide(
-                tf.multiply(
-                    tf.constant(self.constants.k, dtype=tf.float32),
-                    tf.square(x),
-                ),
-                2,
-            )
+        def loss_function(
+            x: tf.Tensor,
+            deriv_x: tf.Variable,
+            c: tf.Tensor,
+        ) -> Tuple[tf.Tensor, Tuple[Any, ...]]:  # pragma: no cover
 
-        self._potential_function = potential
+            current_eigenvalue = self(x)[1][0]
 
-        @tf.function
-        def boundary(x: tf.Tensor) -> tf.Tensor:
-            return (
-                1
-                - tf.exp(
-                    tf.negative(x)
-                    + tf.constant(self.constants.x_left, dtype=tf.float32)
-                )
-            ) * (
-                1
-                - tf.exp(
-                    x - tf.constant(self.constants.x_right, dtype=tf.float32)
-                )
-            )
-
-        @tf.function
-        def parametric_solutions(x: tf.Variable) -> tf.Tensor:
-            return tf.add(
-                tf.constant(self.constants.fb, dtype=tf.float32),
-                tf.multiply(boundary(x), self(x)),
-            )
-
-        @tf.function
-        def differentiate(
-            function: Callable[[tf.Tensor], tf.Tensor], variable: tf.Variable
-        ) -> Tuple[tf.Tensor, tf.Tensor]:
             with tf.GradientTape() as second:
                 with tf.GradientTape() as first:
-                    y = function(variable)
-                dy_dx = first.gradient(y, variable)
-            dy_dxx = second.gradient(dy_dx, variable)
-            return y, dy_dxx
+                    psi, _ = parametric_solution(deriv_x)  # type: ignore
+                dy_dx = first.gradient(psi, deriv_x)
+            dy_dxx = second.gradient(dy_dx, deriv_x)
 
-        @tf.function
-        def get_regulators(
-            y: tf.Tensor,
-            eigenvalue: tf.Tensor,
-            c: tf.Tensor,
-        ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-            # 1 divided by mean of y's, not mean of 1 divided by y's
+            residuum = tf.square(
+                tf.divide(dy_dxx, -2.0 * self.constants.mass)
+                + (potential(x) * psi)
+                - (current_eigenvalue * psi)
+            )
             function_loss = tf.divide(
                 1,
-                tf.add(tf.reduce_mean(tf.square(y)), 1e-6),
+                tf.add(tf.reduce_mean(tf.square(psi)), 1e-6),
             )
-            function_loss = tf.multiply(
-                function_loss,
-                tf.constant(self.constants.v_lambda, dtype=tf.float32),
-            )
-
             lambda_loss = tf.divide(
-                1, tf.add(tf.reduce_mean(tf.square(eigenvalue)), 1e-6)
+                1, tf.add(tf.reduce_mean(tf.square(current_eigenvalue)), 1e-6)
             )
-            lambda_loss = tf.multiply(
+            drive_loss = tf.exp(
+                tf.reduce_mean(tf.subtract(c, current_eigenvalue))
+            )
+            total_loss = residuum + function_loss + lambda_loss + drive_loss
+            return total_loss, (
+                tf.reduce_mean(total_loss),
+                current_eigenvalue,
+                tf.reduce_mean(residuum),
+                function_loss,
                 lambda_loss,
-                tf.constant(self.constants.v_lambda, dtype=tf.float32),
-            )
-
-            drive_loss = tf.exp(tf.reduce_mean(tf.subtract(c, eigenvalue)))
-            drive_loss = tf.multiply(
                 drive_loss,
-                tf.constant(self.constants.v_drive, dtype=tf.float32),
-            )
-
-            return function_loss, lambda_loss, drive_loss
-
-        @tf.function
-        def get_residuum(
-            deriv_x: tf.Variable, x: tf.Tensor, eigenvalue: float
-        ) -> Tuple[tf.Tensor, tf.Tensor]:
-            y, dy_dxx = differentiate(parametric_solutions, deriv_x)  # type: ignore
-
-            # ; Lf = tf.add(
-            # ;     tf.divide(
-            # ;         dy_dxx, tf.multiply(-2.0, tf.constant(self.constants.mass))
-            # ;     ),
-            # ;     tf.multiply(potential(x), y),
-            # ; )
-            # ; tf.square(tf.subtract(Lf, tf.multiply(eigenvalue, y)))
-            residuum = (
-                tf.divide(
-                    dy_dxx,
-                    tf.multiply(
-                        -2.0,
-                        tf.constant(self.constants.mass, dtype=tf.float32),
-                    ),
-                )
-                + (potential(x) * y)
-                - (eigenvalue * y)
-            )
-            return tf.reduce_mean(tf.square(residuum)), y
+                c,
+                0.0,
+            )  # type: ignore
 
         @tf.function
-        def loss_function(
-            deriv_x: tf.Variable,
-            x: tf.Tensor,
-            c: tf.Tensor,
-            eigenvalue: tf.Tensor,
-        ) -> Tuple[tf.Tensor, ...]:
-            residuum, y = get_residuum(deriv_x, x, eigenvalue)  # type: ignore
-            regulators = get_regulators(y, eigenvalue, c)
-            return tf.add_n([residuum, *regulators]), (eigenvalue, residuum, *regulators, c)  # type: ignore
+        def parametric_solution(
+            x: tf.Variable,
+        ) -> Tuple[tf.Tensor, tf.Tensor]:  # pragma: no cover
+            psi, current_eigenvalue = self(x)
+            return (
+                tf.add(
+                    tf.constant(self.constants.fb, dtype=tf.float32),
+                    tf.multiply(boundary(x), psi),
+                ),
+                current_eigenvalue[0],
+            )
 
-        if self.is_debug:
+        @tf.function
+        def boundary(x: tf.Tensor) -> tf.Tensor:  # pragma: no cover
+            return (1 - tf.exp(tf.subtract(self.constants.x_left, x))) * (
+                1 - tf.exp(tf.subtract(x, self.constants.x_right))
+            )
+
+        @tf.function
+        def potential(x: tf.Tensor) -> tf.Tensor:  # pragma: no cover
+            return tf.divide(tf.multiply(self.constants.k, tf.square(x)), 2)
+
+        if self.is_debug:  # pragma: no cover
             self._potential_function = potential
             self._boundary_function = boundary
-            self._parametric_solutions_function = parametric_solutions
-            self._differentiate_function = differentiate
-            self._get_regulators_function = get_regulators
-            self._get_residuum_function = get_residuum
+            self._parametric_solution_function = parametric_solution
             self._loss_function_function = loss_function
 
+        self.parametric_solution = parametric_solution
+
         return cast(LossFunctionT, loss_function)
-
-    def get_x(self, params: QOParams) -> tf.Tensor:
-        return self.constants.sample()
-
-    def get_eignevalue(self) -> tf.Tensor:
-        return self.eigenvalue_function()
-
-    def extra_hook(self, params: QOParams) -> Tuple[Any, ...]:
-        return (params.c, self.get_eignevalue())
 
     def train_generations(
         self,
         params: QOParams,
         generations: int = 5,
         epochs: int = 1000,
-    ) -> List["QONetwork"]:
-        generation_cache: List["QONetwork"] = []
-
+        plot: bool = True,
+    ) -> Generator["QONetwork", None, None]:
         with suppress(KeyboardInterrupt):
             for i in range(generations):
                 logging.info(
-                    f"Generation: {i + 1:4.0f} our of {generations:.0f}, ({i / generations:.2%})"
+                    f"Generation: {i + 1:4.0f} our of "
+                    f"{generations:.0f}, ({i / generations:.2%})"
                 )
                 best = self.train(params, epochs)
-                if best is not None:
-                    generation_cache.append(best)
 
                 params.update()
 
-        return generation_cache
+                if plot:
+                    x = self.constants.sample()
+                    y, _ = self.parametric_solution(x)  # type: ignore
+                    y2, _ = self(x)
+                    self.constants.tracker.plot(
+                        y, y2, solution_x=cast(Sequence[float], x)
+                    )
+                yield best
+
+    def train(self, params: QOParams, epochs: int = 10):
+
+        # ; smallest_loss = 1e20
+        # ; best_model = None
+
+        x = self.constants.sample()
+        if self.is_console_mode:
+            with Progress() as progress:
+                task = progress.add_task(
+                    description="Learning...", total=epochs + 1
+                )
+
+                for i in range(epochs):
+                    self.train_step(x, params)
+
+                    description = self.constants.tracker.get_trace(i)
+
+                    progress.update(
+                        task,
+                        advance=1,
+                        description=description.capitalize(),
+                    )
+        else:
+            for i in range(epochs):
+                self.train_step(x, params)
+                description = self.constants.tracker.get_trace(i)
+                logging.info(description)
+                # ; # TODO Check performance impact
+                # ; if i % 5 == 0 and loss < smallest_loss:
+                # ;     best_model = self.get_deepcopy()
+                # ;     smallest_loss = loss
+
+        return self.get_deepcopy()
+
+    def train_step(self, x: tf.Tensor, params: QOParams) -> tf.Tensor:
+        deriv_x = tf.Variable(initial_value=x)
+
+        with tf.GradientTape() as tape:
+            loss_value, stats = self.loss_function(
+                x,
+                deriv_x,
+                *params.extra(),
+            )
+
+        trainable_vars = self.trainable_variables
+        # ; print([f"{v.shape} -> {float(tf.size(v))}" for v in trainable_vars])
+        gradients = tape.gradient(loss_value, trainable_vars)
+        self.constants.optimizer.apply_gradients(
+            zip(gradients, trainable_vars)
+        )
+        # to make this push loss function agnostic
+        average_loss = tf.reduce_mean(loss_value)
+        self.constants.tracker.push_stats(*stats)
+
+        return average_loss
+
+    def get_deepcopy(self) -> "QONetwork":
+        constants_copy = self.constants.copy(deep=True)
+        weights_copy = deepcopy(self.get_weights())
+        model_copy = self.__class__(constants=constants_copy)
+        model_copy.set_weights(weights_copy)
+        return model_copy
