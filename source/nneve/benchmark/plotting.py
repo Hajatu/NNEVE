@@ -98,10 +98,10 @@ def plot_multi_sample(  # noqa: CFQ002 CCR001
     Tuple[Figure, plt.Axes]
         Figure and Axes used for drawing, usefull if any of them was generated in this function.
     """
-    if fig is None:
+    if fig is None:  # pragma: no cover
         fig = plt.figure(figsize=figsize)
 
-    if ax is None:
+    if ax is None:  # pragma: no cover
         ax = plt.axes()
 
     # find max size to ensure lines are long from left to right
@@ -110,7 +110,7 @@ def plot_multi_sample(  # noqa: CFQ002 CCR001
     if labels is None:
         labels = _default_sample_labels(len(samples))
 
-    if colors is None:
+    if colors is None:  # pragma: no cover
         colors = DEFAULT_COLOR_SET
 
     x = np.arange(n)
@@ -161,7 +161,7 @@ def _max_sample_size(samples: Tuple[ArrayLike, ...]) -> int:
     return max(len(cast(Sized, s)) for s in chain(samples, [()]))
 
 
-def pretty_bytes(i: int) -> str:  # noqa: CFQ004
+def pretty_bytes(i: int) -> str:  # noqa: CFQ004 # pragma: no cover
     if i < 1024:
         return f"{i}"
     if i < 1024**2:

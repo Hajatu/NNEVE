@@ -2,10 +2,9 @@ import logging
 import typing
 from contextlib import suppress
 from copy import deepcopy
-from typing import Any, Callable, List, Sequence, Tuple, cast
+from typing import Any, Callable, Generator, List, Sequence, Tuple, cast
 
 import tensorflow as tf
-from matplotlib import pyplot as plt
 from rich.progress import Progress
 from tensorflow import keras
 
@@ -104,7 +103,7 @@ class QONetwork(keras.Model):
             x: tf.Tensor,
             deriv_x: tf.Variable,
             c: tf.Tensor,
-        ) -> Tuple[tf.Tensor, Tuple[Any, ...]]:
+        ) -> Tuple[tf.Tensor, Tuple[Any, ...]]:  # pragma: no cover
 
             current_eigenvalue = self(x)[1][0]
 
@@ -142,7 +141,9 @@ class QONetwork(keras.Model):
             )  # type: ignore
 
         @tf.function
-        def parametric_solution(x: tf.Variable) -> Tuple[tf.Tensor, tf.Tensor]:
+        def parametric_solution(
+            x: tf.Variable,
+        ) -> Tuple[tf.Tensor, tf.Tensor]:  # pragma: no cover
             psi, current_eigenvalue = self(x)
             return (
                 tf.add(
@@ -153,16 +154,16 @@ class QONetwork(keras.Model):
             )
 
         @tf.function
-        def boundary(x: tf.Tensor) -> tf.Tensor:
+        def boundary(x: tf.Tensor) -> tf.Tensor:  # pragma: no cover
             return (1 - tf.exp(tf.subtract(self.constants.x_left, x))) * (
                 1 - tf.exp(tf.subtract(x, self.constants.x_right))
             )
 
         @tf.function
-        def potential(x: tf.Tensor) -> tf.Tensor:
+        def potential(x: tf.Tensor) -> tf.Tensor:  # pragma: no cover
             return tf.divide(tf.multiply(self.constants.k, tf.square(x)), 2)
 
-        if self.is_debug:
+        if self.is_debug:  # pragma: no cover
             self._potential_function = potential
             self._boundary_function = boundary
             self._parametric_solution_function = parametric_solution
@@ -178,9 +179,7 @@ class QONetwork(keras.Model):
         generations: int = 5,
         epochs: int = 1000,
         plot: bool = True,
-    ) -> List["QONetwork"]:
-        generation_cache: List["QONetwork"] = []
-
+    ) -> Generator["QONetwork", None, None]:
         with suppress(KeyboardInterrupt):
             for i in range(generations):
                 logging.info(
@@ -188,21 +187,17 @@ class QONetwork(keras.Model):
                     f"{generations:.0f}, ({i / generations:.2%})"
                 )
                 best = self.train(params, epochs)
-                if best is not None:
-                    generation_cache.append(best)
 
                 params.update()
 
                 if plot:
                     x = self.constants.sample()
-                    y, _ = self.parametric_solution(x)
+                    y, _ = self.parametric_solution(x)  # type: ignore
                     y2, _ = self(x)
                     self.constants.tracker.plot(
                         y, y2, solution_x=cast(Sequence[float], x)
                     )
-                    plt.show()
-
-        return generation_cache
+                yield best
 
     def train(self, params: QOParams, epochs: int = 10):
 

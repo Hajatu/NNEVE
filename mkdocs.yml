@@ -22,6 +22,8 @@ nav:
     - Documentation: "develop/docs.md"
     - Formatting code: "develop/formatting.md"
     - Quality checks: "develop/quality_checks.md"
+  - HowTo:
+      - Setup: "howto/setup.md"
   - Changelog: changelog.md
   - License: license.md
 markdown_extensions:

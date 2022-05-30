@@ -23,4 +23,4 @@ def test_validate_output():
     deriv_x = tf.Variable(initial_value=x)
     assert x.shape == deriv_x.shape == (16, 1)
     retval = nn._parametric_solution_function(deriv_x)
-    assert retval.shape == (16, 1)
+    assert retval[0].shape == (16, 1)  # type: ignore
