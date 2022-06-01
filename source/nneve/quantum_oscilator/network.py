@@ -28,27 +28,12 @@ class QONetwork(keras.Model):
     loss_function: LossFunctionT
     is_console_mode: bool
 
-    class Config:
-        allow_mutation = True
-        arbitrary_types_allowed = True
-
     def __init__(
         self,
         constants: QOConstants,
         is_debug: bool = False,
         is_console_mode: bool = True,
     ):
-        """_summary_
-
-        Parameters
-        ----------
-        constants : QOConstants
-            _description_
-        is_debug : bool, optional
-            _description_, by default False
-        is_console_mode : bool, optional
-            _description_, by default True
-        """
         self.constants = constants
         self.is_console_mode = is_console_mode
         self.is_debug = is_debug

@@ -18,12 +18,14 @@ nav:
   - Home: index.md
   - Development:
     - Feature flow: "develop/feature.md"
-    - Tox usage: "develop/tox_basics.md"
+    - Tox basics: "develop/tox_basics.md"
     - Documentation: "develop/docs.md"
     - Formatting code: "develop/formatting.md"
     - Quality checks: "develop/quality_checks.md"
-  - HowTo:
-      - Setup: "howto/setup.md"
+    - HowTo:
+        - Set up tox for development: "howto/tox_devenv.md"
+        - Set up Visual Studio Code: "howto/set_up_vsc.md"
+        - Set up environment in VSC: "howto/env_in_vsc.md"
   - Changelog: changelog.md
   - License: license.md
 markdown_extensions:
