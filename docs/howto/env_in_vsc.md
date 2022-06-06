@@ -16,9 +16,9 @@
 
 6. Navigate to
 
-    - Windows: `NNEVE/.tox/devenv/Scripts/activate`
+    - Windows: `NNEVE/.tox/devenv/Scripts/python.exe`
 
-    - Linux: `NNEVE/.tox/devenv/bin/activate`
+    - Linux: `NNEVE/.tox/devenv/bin/python`
 
 7. Select file `python.exe`
 

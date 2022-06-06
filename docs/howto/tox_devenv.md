@@ -22,7 +22,7 @@
 
 4. Activate environment:
 
-    - Windows: `".tox/devenv/Script/activate"`
+    - Windows: `".tox/devenv/Scripts/activate"`
 
     - Linux: `source ".tox/devenv/bin/activate"`
 
