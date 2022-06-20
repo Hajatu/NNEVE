@@ -1,10 +1,13 @@
 import logging
+import pickle
 import typing
 from contextlib import suppress
 from copy import deepcopy
-from typing import Any, Callable, Generator, List, Sequence, Tuple, cast
+from pathlib import Path
+from typing import Any, Callable, Iterable, List, Tuple, cast
 
 import tensorflow as tf
+from matplotlib import pyplot as plt
 from rich.progress import Progress
 from tensorflow import keras
 
@@ -33,13 +36,23 @@ class QONetwork(keras.Model):
         constants: QOConstants,
         is_debug: bool = False,
         is_console_mode: bool = True,
+        name: str = "QONetwork",
     ):
         self.constants = constants
         self.is_console_mode = is_console_mode
         self.is_debug = is_debug
         inputs, outputs = self.assemble_hook()
-        super().__init__(inputs=inputs, outputs=outputs)
+        super().__init__(
+            inputs=inputs,
+            outputs=outputs,
+            name=name,
+        )
         self.loss_function = self.get_loss_function()
+        self.compile(
+            self.constants.optimizer,
+            jit_compile=True,
+        )
+        assert self.name is not None
 
     def assemble_hook(
         self,
@@ -49,14 +62,16 @@ class QONetwork(keras.Model):
             keras.layers.InputLayer,
             keras.Input(
                 shape=(1,),
+                name="input",
                 dtype=tf.float32,
             ),
         )
         # One neuron decides what value should λ have
         eigenvalue_out = Eigenvalue(name="eigenvalue")(inputs)
-        input_and_eigenvalue = keras.layers.Concatenate(axis=1)(
-            [inputs, eigenvalue_out]
-        )
+        input_and_eigenvalue = keras.layers.Concatenate(
+            axis=1,
+            name="join",
+        )([inputs, eigenvalue_out])
         # two dense layers, each with {neurons} neurons as NN body
         d1 = keras.layers.Dense(
             2,
@@ -164,7 +179,7 @@ class QONetwork(keras.Model):
         generations: int = 5,
         epochs: int = 1000,
         plot: bool = True,
-    ) -> Generator["QONetwork", None, None]:
+    ) -> Iterable["QONetwork"]:
         with suppress(KeyboardInterrupt):
             for i in range(generations):
                 logging.info(
@@ -177,17 +192,15 @@ class QONetwork(keras.Model):
 
                 if plot:
                     x = self.constants.sample()
-                    y, _ = self.parametric_solution(x)  # type: ignore
                     y2, _ = self(x)
-                    self.constants.tracker.plot(
-                        y, y2, solution_x=cast(Sequence[float], x)
-                    )
+                    self.constants.tracker.plot(y2, x)
                 yield best
 
-    def train(self, params: QOParams, epochs: int = 10):
-
-        # ; smallest_loss = 1e20
-        # ; best_model = None
+    def train(  # noqa: CCR001
+        self, params: QOParams, epochs: int = 10
+    ) -> "QONetwork":
+        smallest_loss = 1e20
+        best_model = self.get_deepcopy()
 
         x = self.constants.sample()
         if self.is_console_mode:
@@ -197,7 +210,7 @@ class QONetwork(keras.Model):
                 )
 
                 for i in range(epochs):
-                    self.train_step(x, params)
+                    self._train_step(x, params)
 
                     description = self.constants.tracker.get_trace(i)
 
@@ -208,17 +221,17 @@ class QONetwork(keras.Model):
                     )
         else:
             for i in range(epochs):
-                self.train_step(x, params)
+                loss = self._train_step(x, params)
                 description = self.constants.tracker.get_trace(i)
                 logging.info(description)
-                # ; # TODO Check performance impact
-                # ; if i % 5 == 0 and loss < smallest_loss:
-                # ;     best_model = self.get_deepcopy()
-                # ;     smallest_loss = loss
+                # TODO Check performance impact
+                if i % 5 == 0 and loss < smallest_loss:
+                    best_model = self.get_deepcopy()
+                    smallest_loss = loss
 
-        return self.get_deepcopy()
+        return best_model
 
-    def train_step(self, x: tf.Tensor, params: QOParams) -> tf.Tensor:
+    def _train_step(self, x: tf.Tensor, params: QOParams) -> float:
         deriv_x = tf.Variable(initial_value=x)
 
         with tf.GradientTape() as tape:
@@ -229,7 +242,6 @@ class QONetwork(keras.Model):
             )
 
         trainable_vars = self.trainable_variables
-        # ; print([f"{v.shape} -> {float(tf.size(v))}" for v in trainable_vars])
         gradients = tape.gradient(loss_value, trainable_vars)
         self.constants.optimizer.apply_gradients(
             zip(gradients, trainable_vars)
@@ -246,3 +258,17 @@ class QONetwork(keras.Model):
         model_copy = self.__class__(constants=constants_copy)
         model_copy.set_weights(weights_copy)
         return model_copy
+
+    def save(self, filepath: Path) -> None:  # noqa: FNE003
+        weights = self.get_weights()
+        with filepath.open("wb") as file:
+            pickle.dump(weights, file)
+
+    def load(self, filepath: Path) -> None:  # noqa: FNE004
+        with filepath.open("rb") as file:
+            weights = pickle.load(file)
+        self.set_weights(weights)
+
+    def plot_solution(self) -> None:
+        x = self.constants.sample()
+        plt.plot(x, self(x)[0])

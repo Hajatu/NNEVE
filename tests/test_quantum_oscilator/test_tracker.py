@@ -1,9 +1,15 @@
+from pathlib import Path
+
 import pytest
 import tensorflow as tf
 
 from nneve.quantum_oscilator.network import QOConstants, QONetwork
 from nneve.quantum_oscilator.params import QOParams
 from nneve.quantum_oscilator.tracker import QOTracker
+
+ROOT_DIR = Path(__file__).parent.parent.parent
+EXAMPLES_DIR = ROOT_DIR / "examples"
+WEIGHTS_DIR = EXAMPLES_DIR / "weights"
 
 
 class TestQOTracker:
@@ -26,10 +32,15 @@ class TestQOTracker:
 
     def test_plotting(self, network: QONetwork) -> None:
         network.summary()
-        for _ in network.train_generations(
-            QOParams(c=-2.0),
-            generations=4,
-            epochs=10,
-            plot=True,
+        for _ in enumerate(
+            network.train_generations(
+                QOParams(c=-2.0),
+                generations=4,
+                epochs=10,
+                plot=True,
+            )
         ):
             pass
+            # ; plt.show()
+            # ; if input().lower().startswith("y"):
+            # ;     best.save(WEIGHTS_DIR / f"{index}.w")
